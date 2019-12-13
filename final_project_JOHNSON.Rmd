@@ -1,0 +1,411 @@
+---
+title: "BMIN503/EPID600 Final Project"
+output: html_document
+author: "Emily Johnson"
+output: 
+  html_document:
+    toc: false 
+    depth: 3 
+    theme: paper 
+    highlight: tango
+---
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width = 400)
+```  
+***
+
+### Overview
+
+>Neonatal abstinence syndrome (NAS) is is a postnatal opioid withdrawal syndrome, characterized by impaired respiration, feeding, and weight gain, which affects a newborn every 25 minutes in the United States (Patrick et al, 2015). I will performing both an epidemiological analysis of NAS and a single cell RNA sequencing analysis for fetal midbrain development, as NAS is controlled by the midbrain dopaminergic pathway, and this healthy fetal development analysis will be used to compare NAS single cell RNA sequencing data at a later date. This work is supported by Dr. Kam Leong and Dr. Hyesung Kim in Columbia BME. 
+
+# Introduction 
+
+>The human brain and its development are immensely complex, and during development the brain is especially vulnerable to external toxicity and injury. Opioid use is on the rise in the United States, with 11.3% of Americans abusing non-prescription opioids in their lifetime, in what has been described as an epidemic (Saha et al, 2016). This increase in opioid use disorder (OUD) extends to mothers, and as maternal OUD increases, so does neonatal abstinence syndrome (NAS). Neonatal abstinence syndrome is a postnatal opioid withdrawal syndrome, characterized by impaired respiration, feeding, and weight gain (McQueen et al, 2016). There is also evidence that opioid exposure during pregnancy and infanthood results in epigenetic changes in future generations (Maguire et al, 2016). Incidence of NAS increased nearly fivefold between 2000 and 2012, and by 2012 an infant was born with the syndrome every 25 minutes in the US (Patrick et al, 2015). In addition to the negative effects of the syndrome on infants, the uptick in NAS has significant economic consequences—the syndrome accounts for a total of $1.5 billion in hospital charges, and approximately 80% of infants born with NAS in the US are enrolled in Medicaid (Patrick et al, 2015). Thus, opioid exposure in utero gives rise to numerous detrimental short-term and long-term effects at an individual and societal level.
+
+> Despite the wide impact of NAS, there is little research on it's effects, especially on the molecular and cellular level. For my project I plan to dually take an epidemiological and molecular approach to reviewing NAS, and this interdiscioplinary approach can hopefully help develop a fuller picture of NAS. From my work with Dr. Kim we established that scRNA analysis is the best way to study NAS on a molecular level, as the initial methods employed for expression analysis, such as qPCR, are thrown off by drug doses given to the organoids and don't yield consistent results.  
+
+## Methods 
+
+### Libraries
+First I will read in the libraries 
+``` {r eval = TRUE}
+#epi 
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(car)
+library(dplyr)
+
+#scRNA 
+library(Seurat)
+library(edgeR)
+library(limma)
+library(gplots)
+library(RColorBrewer)
+library(Matrix)
+library(gdata)
+```
+
+## Epidemiology of NAS 
+
+### Loading and cleaning data 
+All data from PHC4 via opendataPA 
+
+#### Overall overdose in PA
+Reading in the dataset then removing all variables that are not needed
+``` {r eval = TRUE}
+overdose <- read.csv("Overdose_Information_Network_Data_CY_January_2018_-_Current_Monthly_County_State_Police.csv")
+
+overdose <- overdose %>%
+  select(-c("Incident.ID", "Incident.Time", "Victim.ID", "Victim.State", "Victim.County", "Accidental.Exposure", "Administration.ID", "Dose.Count", "Dose.Unit", "Dose.Desc", "Response.Time.Desc", "Response.Desc", "Revive.Action.Desc", "Third.Party.Admin.Desc", "Victim.County.FIPS.Code", "Victim.County.Latitude", "Victim.County.Longitude", "Victim.County.Latitude.and.Longitude")) %>%
+ group_by(Incident.County.Name) %>% mutate(count = n())
+
+```
+
+#### NAS data by county 
+Reading in the datasets, removing unneeded variables, combining into one frame, and filtering for consistent time periods 
+``` {r eval = TRUE}
+
+#Rate of neonatal hospital stays with withdrawal symptoms during birth hospitalization (first 28 days of life) per 1,000 livebirths	
+county.withdrawal.stays <- read.csv("Rate_of_Neonatal_Hospital_Stays_with_Withdrawal_Symptoms_from_Maternal_Use_of_Drugs_of_Addiction_CY_2016-Current_County_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+county.OUD.diagnosis <- read.csv("Rate_of_Women_Diagnosed_with_Opioid_Use_Disorder__OUD__during_Pregnancy_CY_2016_-_Current_Statewide_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+county.MA <- read.csv("Rate_of_Women_on_Medical_Assistance__MA__Diagnosed_with_Opioid_Use_Disorder__OUD__during_Pregnancy_CY_2016-Current_Statewide_Department_of_Human_Services__DHS_.csv")
+
+#cleaning--------------------- 
+county.MA <- county.MA %>%
+  select(-c("Time.Period.Dates", "Type.of.Rate", "Number.of.Women.with.a.Delivery.and.OUD.Diagnosis.notes", "Number.of.Women.with.a.Delivery.and.OUD.Description", "Total.Number.of.Deliveries.Description", "Total.Number.of.Deliveries.Notes", "County.Code.Text", "County.Code.Number")) %>%
+  filter(Geographic.Area == "County")
+
+county.OUD.diagnosis <- county.OUD.diagnosis %>%
+  select(-c("Time.Period.Dates", "Type.of.Rate", "Number.of.Women.with.a.Delivery.and.OUD.Diagnosis.notes", "Number.of.Women.with.a.Delivery.and.OUD.Description", "Total.Number.of.Deliveries.Notes" ,"Total.Number.of.Deliveries.Description", "County.Code.Text", "County.Code.Number")) %>%
+  filter(Geographic.Area == "County") %>%
+  rename(Georeferenced.Column = New.Georeferenced.Column)
+
+county.OUD.diagnosis <- county.OUD.diagnosis %>%
+    filter(Geographic.Area == "County") %>%
+  select(c("Rate.of.Pregnant.Women.with.OUD.Diagnosis.at.Delivery", "County.FIPS.Code", "Time.Period", "Geographic.Name")) %>%
+  filter(Time.Period == c("2016 Annual", "2017 Annual"))
+
+county.withdrawal.stays <- county.withdrawal.stays %>%
+  filter(Geographic.Area == "County") %>%
+  select(c("Rate.of.Neonatal.Hospital.Stays.with.Withdrawal.Symptoms", "County.FIPS.Code", "Time.Period", "Geographic.Name")) %>%
+  filter(Time.Period == c("2016 Annual", "2017 Annual"))
+
+county.withdrawal.stays$Geographic.Name <- paste(county.withdrawal.stays$Geographic.Name, "County", sep=" ")
+  
+county <- full_join(county.MA, county.OUD.diagnosis, by = c("Geographic.Name", "Time.Period"))
+county <- full_join(county, county.withdrawal.stays, by = c("Geographic.Name", "Time.Period"))
+
+county <- full_join(county.MA, county.OUD.diagnosis, by = c("County.FIPS.Code", "Time.Period"))
+
+
+county <- county %>%
+  filter(Time.Period == c("2016 Annual", "2017 Annual"))
+
+philadelphia <- county %>%
+  filter(Geographic.Name == "Philadelphia County")
+
+```
+
+#### NAS data for PA over time 
+Reading in the datasets and removing unneeded variables 
+``` {r eval = TRUE}
+rate.of.NAS <- read.csv("Rate_of_Neonatal_Abstinence_Syndrome_per_1_000_Newborn_Stays_FYs_2000-2001_to_FYs_2016-2017_Statewide_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+rate.of.OUD <- read.csv("Statewide_Maternal_Hospital_Stays_Opioid_Use_Rates_2000_to_present__PA_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+rate.of.NAS <- rate.of.NAS %>%
+    select(-c("State.Name", "Time.Period.Date.Start", "Time.Period.Date.End", "Type.of.Rate", "Time.Period", "State.FIPS.Code")) 
+
+rate.of.OUD <- rate.of.OUD %>%
+     select(-c("State", "Time.Period.Date.Start", "Time.Period.Date.End", "Type.of.Rate")) 
+
+rate.of.OUD.NAS <- cbind(rate.of.OUD, rate.of.NAS)
+```
+
+#### NAS data for PA in 2016/17
+Reading in the datasets, removing unneeded variables, joining frames using the same time periods 
+``` {r eval = TRUE}
+PA.gestation.stage <- read.csv("Statewide_Delivery_Stays_Percent_of_Gestation_Stages_with_or_without_Opioid_Use_2016-2017_PA_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+PA.readmission <- read.csv("Statewide_Delivery_Stays_Percent_Readmitted_with_or_without_Opioid_Use_2016-2017_PA_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+PA.medicaid.OUD <- read.csv("Statewide_Maternal_Stays_percent_Medicaid_with_or_without_Opioid_Use_2016-2017_PA_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+PA.medicaid.NAS<- read.csv("Newborn_Hospital_Stays_with_Neonatal_Abstinence_Syndrome_Percent_Paid_by_Medicaid_Statewide_Health_Care_Cost_Containment_Council__PHC4_.csv")
+
+PA.gestation.stage <- PA.gestation.stage %>%
+     select(-c("State", "State.FIPS.Code", "Time.Period", "Time.Period.Date.Start", "Time.Period.Date.End")) 
+
+PA.readmission <- PA.readmission %>%
+  select(-c("State", "State.FIPS.Code", "Time.Period", "Time.Period.Date.Start", "Time.Period.Date.End")) 
+
+PA.medicaid.NAS <- PA.medicaid.NAS %>%
+  select(-c("State.Name", "State.FIPS.Code", "Time.Period", "Time.Period.Date.Start", "Time.Period.Date.End")) 
+
+PA.medicaid.OUD <- PA.medicaid.OUD %>%
+  select(-c("State", "State.FIPS.Code", "Time.Period", "Time.Period.Date.Start", "Time.Period.Date.End")) 
+
+PA.readmission.medicaid <- inner_join(PA.readmission, PA.medicaid.OUD)
+
+
+```
+
+## Molecular Analysis of Midbrain Development 
+``` {r reval = TRUE}
+gse <- getGEO("GSE127967", GSEMatrix = TRUE)
+
+
+design <- model.matrix(~ -1 + factor(GSE27973.rma$treatment))
+colnames(design) <- levels(factor(GSE27973.rma$treatment))
+design
+
+#Fit a linear model with limma package. Expression data linked to outcome of a design matrix model
+fit <- lmFit(GSE27973.rma, design)
+#Create contrast groups of interest
+GSE27973.contrast <- makeContrasts(treatment = CSE - medium, 
+                                  levels = design)
+#Get the contrasts for samples of interest
+fit2 <- contrasts.fit(fit, GSE27973.contrast)
+#Adjust fit coefficients using an empirical Bayes moderation of standard errors
+fit2 <- eBayes(fit2)
+
+#Results for each hypothesis test can be extracted using
+treat_results <- topTable(fit2, coef = "treatment", adjust = "BH", num = 200, p.value = .05)
+head(treat_results)
+
+treat_results$ID = row.names(treat_results)
+treat_results$SYMBOL <- lapply(treat_results$ID, function(x) mget(x, env = hgu133plus2SYMBOL, ifnotfound = NA)[[1]])
+head(treat_results)
+
+# Output all differential expression results
+full_res <- topTable(fit2, coef = "treatment" , adjust = "BH", num = Inf)
+
+# Assign (in)significant genes
+full_res$sig <- rep("insignificant", nrow(full_res))
+full_res$sig[which(full_res$adj.P.Val<0.05)] <- "significant"
+ggplot(full_res, aes(x = logFC, y = -log10(adj.P.Val), color = sig)) + 
+  geom_point() +
+  theme_bw() +
+  ggtitle("Volcano plot") +
+  xlab("LogFC")+
+  ylab("-Log10(q-value)") +
+  scale_color_manual(values = c("black","red")) +
+  theme(legend.position = "none")
+
+
+
+data = getGEO("GSE127967") 
+datExpr = exprs (data[[1]])
+datExpr <- as.data.frame(datExpr)
+
+```
+
+# Results
+## Epidemiology of NAS 
+### Overdoses -- Introducing the Epidemic 
+
+Map of overdose rate by county in PA 
+```{r eval = TRUE}
+
+#read in US map 
+counties <- readRDS(gzcon(url("https://raw.githubusercontent.com/HimesGroup/BMIN503/master/DataFiles/uscounties_2010.rds")))
+
+#filter to just PA 
+counties <- counties %>%
+  filter(STATE == 42) %>%
+  rename(County.FIPS.Code = COUNTY)
+
+#clean overdose data for mapping  
+overdose.counts <- overdose %>%
+  group_by(Incident.County.Name, Incident.County.Latitude.and.Longitude, Incident.County.FIPS.Code) %>%
+  summarise(count = mean(count)) %>%
+  rename(County.FIPS.Code = Incident.County.FIPS.Code) %>%
+  mutate(County.FIPS.Code = sprintf("%03d", County.FIPS.Code))
+  
+overdose.map <- inner_join(counties, overdose.counts, by = "County.FIPS.Code")
+
+myPalette <- colorRampPalette(brewer.pal(9, "BuPu"))  # RColorBrewer palette
+
+# To save space, we can save theme commands as a function that we can "add" to calls to ggplot
+my_theme <- function() {
+  theme_minimal() +                                  # shorthand for white background color
+  theme(axis.line = element_blank(),                 # further customization of theme components
+        axis.text = element_blank(),                 # remove x and y axis text and labels
+        axis.title = element_blank(),
+        panel.grid = element_line(color = "white"),  # make grid lines invisible
+        legend.key.size = unit(0.8, "cm"),           # increase size of legend
+        legend.text = element_text(size = 16),       # increase legend text size
+        legend.title = element_text(size = 16))      # increase legend title size
+}
+
+ggplot() +
+  geom_sf(data = overdose.map, aes(fill = count, geometry = geometry)) +
+  my_theme() +                                           # add our custom theme
+  ggtitle("Number of Overdoses Per County in PA in 2018-19") + # add plot title
+  scale_fill_gradientn(name = "Number of \nOverdoses",      # change legend title
+                    colours = myPalette(100))            # RColorBrewer palette OR
+                    #colours = viridis(100))             # viridis palette
+  
+```
+Overdose rates are highest in Dauphin, York, Bucks, and Allegheny Counties. These are the 14th, 8th, 4th, and 2nd most populous counties in PA respectively, indicating that overdose rates are not completely in line with population. Increasingly opioid addiction has become a problem in rural areas, so increasing overdoses in less populous areas is to be expected. 
+
+
+Graph of overdose broken by drug type, to see trends in overdose cause
+``` {r eval = TRUE}
+
+#shorten drug type names for ease 
+overdose$Susp.OD.Drug.Desc <- gsub("FENTANYL ANALOG/OTHER SYNTHETIC OPIOID", "FENT ANALOG", overdose$Susp.OD.Drug.Desc)
+overdose$Susp.OD.Drug.Desc <- gsub("BENZODIAZEPINES (I.E.VALIUM, XANAX, ATIVAN, ETC)", "BENZODIAZEPINES", overdose$Susp.OD.Drug.Desc, fixed=TRUE)
+overdose$Susp.OD.Drug.Desc <- gsub("BARBITURATES (I.E. AMYTAL, NEMBUTAL, ETC)", "BARBITURATES", overdose$Susp.OD.Drug.Desc, fixed=TRUE)
+
+
+ggplot(data = overdose, aes(x = Susp.OD.Drug.Desc)) + geom_bar(fill = "#238A8DFF") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Overdoses in PA by Drug Type 2018-19") + 
+  xlab("Suspected Overdose Drug") + ylab("Number of Overdoses") 
+
+ggplot(data = overdose %>% filter(Incident.County.Name == "Philadelphia"), aes(x = Susp.OD.Drug.Desc)) + geom_bar(fill = "#238A8DFF") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Overdoses in Philadelphia by Drug Type 2018-19") + 
+  xlab("Suspected Overdose Drug") + ylab("Number of Overdoses") 
+
+```
+The highest drug overdose types across the state and in Philadelphia are fentanyl and heroin (discounting unknown types). Fentanyl is incredibly potent, leading to overdose. It's rise is therefore deeply concerning, which is why my lab and I have performed our experiments on OUD and NAS using a fentanyl model. 
+
+Graph of overdoses over the past year in Philadelphia and PA by demographics 
+``` {r eval = TRUE}
+#group by gender and race. stack male and female and plot diff ethnicities
+ggplot(data = overdose  %>% filter(Gender.Desc != "Unknown"), aes(x = Gender.Desc, fill = Gender.Desc)) + geom_bar() +
+  facet_wrap(~Race) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Overdoses in PA by Gender and Race") + 
+  xlab("Gender of Victim") + ylab("Number of Overdoses") + 
+  labs(fill = "Gender") + 
+  scale_fill_manual(values=c("#CC0066", "#238A8DFF"))
+
+ggplot(data = overdose %>% filter(Incident.County.Name == "Philadelphia"), aes(x = Gender.Desc, fill = Gender.Desc)) + geom_bar() +
+  facet_wrap(~Race) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Overdoses in Philadelphia by Gender and Race") + 
+  xlab("Gender of Victim") + ylab("Number of Overdoses") + 
+  labs(fill = "Gender") + 
+  scale_fill_manual(values=c("#CC0066", "#238A8DFF"))
+
+``` 
+Drug overdoses are higher in males, and overdose rates are highest in white Pennsylvanians and Philadelphians. 
+
+### NAS PA data -- how NAS affects individuals and society 
+Graph of rate of NAS over time increase 
+``` {r eval = TRUE}
+
+ggplot(data = rate.of.OUD.NAS) + geom_point(aes(x = Time.Period, y = Rate.of.Newborn.NAS.Stays), color = "deepskyblue1", size = 3) + geom_point(aes(x = Time.Period, y = Rate.of.Maternal.Stays.with.Opioid.Use), color = "dodgerblue4", size = 3) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Rate of Maternal OUD and NAS in PA") + 
+  xlab("Year") + ylab("Rates of OUD and NAS per 1000 Hospital Stays") +
+  labs(caption = "Dark blue = OUD \nLight blue = NAS") +
+
+```
+Maternal opioid use and NAS have been increasing steadily each year. 
+
+Graph of gestational state
+``` {r eval = TRUE}
+
+PA.gestation.stage$Gestation.Stage <- factor(PA.gestation.stage$Gestation.Stage,levels = c("Premature", "Early Term", "Full Term or Longer"))
+
+ggplot(data = PA.gestation.stage, aes(x = Gestation.Stage, y = Percent.of.Delivery.Records.at.Specified.Gestation.Stage, fill = Type.of.Category)) + geom_col(position = "dodge") +
+  ggtitle("Gestational Stage at Birth with and without Maternal OUD in PA") + 
+  xlab("Gestation Stage") + ylab("Percent of Delivery Records at Specified Stage") +
+  scale_fill_manual(values=c("#C0392B", "#238A8DFF")) + 
+  labs(fill = "OUD status")
+                                                                                                                                
+```
+A higher percentage of delivery records indicate newborns born premature or in early term with maternal opioid use than without. Conversely, a higher percentage of newborns are born at full term when there is not maternal opioid use. This indicates that maternal opioid use is tied to premature birth, which itself comes with a host of negative outcomes. 
+
+Graphs of readmission and medicaid usage
+``` {r eval = TRUE}
+ggplot(data = PA.readmission.medicaid, aes(x = Type.of.Category, y = Percent.of.Delivery.Records.that.were.Readmitted.within.365.Days)) + geom_bar(stat="identity", fill = "#238A8DFF") +
+  ggtitle("Readmission within 365 days of birth") + 
+  xlab("OUD Status") + ylab("Percent of Deliveries Readmitted") 
+
+ggplot(data = PA.readmission.medicaid, aes(x = Type.of.Category, y = Percent.of.Maternal.Records.with.Anticipated.Primary.Payer.Medicaid)) + geom_bar(stat="identity", fill = "#238A8DFF") +
+  ggtitle("Maternal Records with Anticipated Primary Payer Medicaid") + 
+  xlab("OUD Status") + ylab("Percent of Mothers Utilizing Medicaid")
+
+
+```
+Readmission rates within one year of birth are relatively low for both NAS and non-NAS newborns, but there is an increase of .071% for births associated with opioid use. A much larger difference is a 43% increase in anticipated primary payer medicaid use for these readmissions when there is maternal opioid use. These differences together mean that NAS increases the likelihood of hospital readmission, and that there is an increased chance this readmission will be paid through medicaid. This lends itself to the view of NAS as a public health issue that needs to be addressed systematically. The mothers who need vital healthcare for their children due to NAS complications are least likely to have these resources. 
+
+Boxplot of NAS in 2016 and 2017 
+``` {r eval = TRUE}
+
+ggplot(county.withdrawal.stays, aes(x=Time.Period, y=Rate.of.Neonatal.Hospital.Stays.with.Withdrawal.Symptoms)) + 
+  geom_boxplot(outlier.colour="red", fill='#238A8DFF', alpha = .6) +  geom_jitter(shape=16, alpha = .3,    position=position_jitter(0.2)) + 
+   ggtitle("Rate of NAS Withdrawal Symptoms in 2016 vs 2017") + 
+  xlab("Year") + ylab("Rate of NAS symptoms per 1000 live births")
+  
+ 
+```
+There is an increase in the median number of live births with NAS symptoms in 2016 vs 2017 in PA, though there is more variation within 2017. 
+
+Map of OUD and NAS
+``` {r eval = TRUE}
+counties <- readRDS(gzcon(url("https://raw.githubusercontent.com/HimesGroup/BMIN503/master/DataFiles/uscounties_2010.rds")))
+
+counties <- counties %>%
+  filter(STATE == 42) %>%
+  rename(County.FIPS.Code = COUNTY)
+
+county <-county %>% 
+  select(-"County.FIPS.Code") %>%
+  mutate(County.FIPS.Code.x = sprintf("%03d", County.FIPS.Code.x)) %>%
+  rename(County.FIPS.Code = County.FIPS.Code.x)
+
+NAS.map <- inner_join(counties, county, by = "County.FIPS.Code")
+
+NAS.map.test <- NAS.map %>% 
+  select(c("Rate.of.Neonatal.Hospital.Stays.with.Withdrawal.Symptoms", "geometry"))
+
+#average rate of stays per county 
+
+myPalette <- colorRampPalette(brewer.pal(9, "BuPu"))  # RColorBrewer palette
+
+# To save space, we can save theme commands as a function that we can "add" to calls to ggplot
+my_theme <- function() {
+  theme_minimal() +                                  # shorthand for white background color
+  theme(axis.line = element_blank(),                 # further customization of theme components
+        axis.text = element_blank(),                 # remove x and y axis text and labels
+        axis.title = element_blank(),
+        panel.grid = element_line(color = "white"),  # make grid lines invisible
+        legend.key.size = unit(0.8, "cm"),           # increase size of legend
+        legend.text = element_text(size = 16),       # increase legend text size
+        legend.title = element_text(size = 16))      # increase legend title size
+}
+
+ggplot() +
+  geom_sf(data = NAS.map.test, aes(fill = Rate.of.Neonatal.Hospital.Stays.with.Withdrawal.Symptoms)) +
+  my_theme() +                                           # add our custom theme
+  ggtitle("Rate of NAS Hospital Stays in 2016") + # add plot title
+  scale_fill_gradientn(name = "Rate of \nStays with \nNAS Withdrawal \nSymptoms ",      # change legend title
+                    colours = myPalette(100))            # RColorBrewer palette 
+```
+
+### Philadelphia data -- who does this affect in Philadelphia? 
+Graph of rate of hospital stays
+``` {r eval = TRUE}
+#USE Q date not annual and see over time for Philadelphia and then all counties 
+
+#compare how all CSVs work together 
+```
+
+## Molecular Analysis of Midbrain Development 
+``` {r eval = TRUE}
+
+
+```
+
+# Conclusion 
+
+
